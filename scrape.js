@@ -36,12 +36,17 @@ async function readKeywords() {
 // отправка строки в Apps Script
 async function sendRow(rowObj) {
   rowObj.ts = new Date().toISOString();
-  await fetch(APP_SCRIPT_WEBHOOK, {
+
+  const res = await fetch(APP_SCRIPT_WEBHOOK, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(rowObj)
   });
+
+  const text = await res.text();
+  console.log("    Ответ Apps Script:", res.status, text);
 }
+
 
 // поиск постов по ключевому слову на threads.com
 async function searchPosts(page, keyword) {
