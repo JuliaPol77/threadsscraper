@@ -47,7 +47,6 @@ async function sendRow(rowObj) {
   console.log("    Ответ Apps Script:", res.status, text);
 }
 
-
 // поиск постов по ключевому слову на threads.com
 async function searchPosts(page, keyword) {
   const searchUrl =
@@ -57,8 +56,7 @@ async function searchPosts(page, keyword) {
   await page.goto(searchUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  // ПРИМЕРНЫЙ селектор: все <a>, где href содержит "/post/"
-  // Если что — потом подправим под реальную разметку
+  // Берём все <a>, где href содержит "/post/"
   const links = await page.$$eval('a[href*="/post/"]', els =>
     Array.from(new Set(
       els
@@ -82,23 +80,29 @@ async function scrapeThread(page, keyword, url) {
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  // ---------- МЕТРИКИ views / comments ----------
-  // TODO: эти селекторы надо будет подправить через DevTools
-  const commentsEl =
-    await page.$('button[aria-label*="repl"], a[aria-label*="repl"]');
-  const viewsEl =
-    await page.$('button[aria-label*="view"], a[aria-label*="view"]');
-
   let commentsCount = null;
   let viewsCount = null;
 
-  if (commentsEl) {
-    const txt = await commentsEl.innerText();
-    commentsCount = parseIntSafe(txt);
+  // ---------- VIEWS: <span>8 925 просмотров</span> ----------
+  try {
+    const viewsLocator = page.locator('span:has-text("просмотров")').first();
+    if (await viewsLocator.count()) {
+      const txt = await viewsLocator.innerText();
+      viewsCount = parseIntSafe(txt);
+    }
+  } catch (e) {
+    console.log("    Не смог прочитать просмотры:", e.message);
   }
-  if (viewsEl) {
-    const txt = await viewsEl.innerText();
-    viewsCount = parseIntSafe(txt);
+
+  // ---------- COMMENTS: svg[aria-label="Ответ"] + span span (внутренний span с числом) ----------
+  try {
+    const commentsLocator = page.locator('svg[aria-label="Ответ"] + span span').first();
+    if (await commentsLocator.count()) {
+      const txt = await commentsLocator.innerText();
+      commentsCount = parseIntSafe(txt);
+    }
+  } catch (e) {
+    console.log("    Не смог прочитать комментарии:", e.message);
   }
 
   console.log("    Метрики:", { viewsCount, commentsCount });
@@ -141,7 +145,6 @@ async function scrapeThread(page, keyword, url) {
       continue; // пропускаем чужие ответы
     }
 
-    // Грубый вариант: берём весь текст article
     const fullText = (await article.innerText()).trim();
     const status = i === 0 ? "пост" : "комментарий";
 
