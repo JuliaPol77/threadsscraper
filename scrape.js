@@ -6,34 +6,34 @@ const SPREADSHEET_ID = "1jl9gmFElhLw3i-eEPg2tdf6XYNL9xKWyDJuAiaRG-I0";
 // >>> ВСТАВЬ СЮДА СВОЙ WEBHOOK ИЗ APPS SCRIPT
 const APP_SCRIPT_WEBHOOK = "https://script.google.com/macros/s/AKfycbzJ6_YlOThPmeD9rRT6mhr_zWiHzokQLr5AaQ9Uxw_XwBz0VY8YUBFTKY-3SegLquIP/exec";
 
-const KEY_SHEET_NAME = "ключи";           // лист с ключевыми словами
-const MAX_POSTS_PER_KEYWORD = 5;          // сколько постов на ключ берём
+const KEY_SHEET_NAME = "ключи";
+const MAX_POSTS_PER_KEYWORD = 5;
 
 // CSV URL для листа "ключи"
 const KEY_CSV_URL =
   `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(KEY_SHEET_NAME)}`;
 
-// ✅ парсер числа: собираем ВСЕ группы цифр (чтобы 142 356 → 142356)
+// Собираем ВСЕ группы цифр (чтобы "142 356" → "142356")
 function parseIntSafe(str) {
   if (!str) return null;
-  const allDigits = (str.match(/\d+/g) || []).join(""); // все группы цифр подряд
+  const allDigits = (str.match(/\d+/g) || []).join("");
   return allDigits ? parseInt(allDigits, 10) : null;
 }
 
-// читаем ключевые слова из CSV
+// читаем ключи
 async function readKeywords() {
   const res = await fetch(KEY_CSV_URL);
   const csv = await res.text();
   const lines = csv.trim().split("\n");
-  lines.shift(); // убираем заголовок "keyword"
+  lines.shift(); // заголовок
 
   return lines
     .map(l => l.trim())
     .filter(Boolean)
-    .map(l => l.replace(/^"+|"+$/g, "")); // убираем лишние кавычки по краям
+    .map(l => l.replace(/^"+|"+$/g, ""));
 }
 
-// отправка строки в Apps Script
+// отправка строки в Google Sheets через Apps Script
 async function sendRow(rowObj) {
   rowObj.ts = new Date().toISOString();
 
@@ -47,7 +47,7 @@ async function sendRow(rowObj) {
   console.log("    Ответ Apps Script:", res.status, text);
 }
 
-// поиск постов по ключевому слову на threads.com
+// поиск постов по ключу
 async function searchPosts(page, keyword) {
   const searchUrl =
     `https://www.threads.com/search?q=${encodeURIComponent(keyword)}`;
@@ -56,7 +56,6 @@ async function searchPosts(page, keyword) {
   await page.goto(searchUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  // Берём все <a>, где href содержит "/post/"
   const links = await page.$$eval('a[href*="/post/"]', els =>
     Array.from(new Set(
       els
@@ -70,92 +69,107 @@ async function searchPosts(page, keyword) {
   return top;
 }
 
-// разбор одного поста: метрики + текст
+// разбор одного поста: метрики + текст поста
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
 
-  // переписываем домен threads.com → www.threads.net
   const normalizedUrl = url.replace("https://www.threads.com", "https://www.threads.net");
 
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  let commentsCount = null;
+  // ---------- МЕТРИКИ ----------
+
   let viewsCount = null;
+  let commentsCount = null;
 
-  // ---------- VIEWS: <span>8 925 просмотров</span> или "8,925 views" ----------
   try {
-    const viewsLocator = page
-      .locator('span:has-text("просмотров"), span:has-text("views")')
-      .first();
+    // собираем ВСЕ тексты, где есть "просмотров"/"views"
+    const viewsCandidates = await page.$$eval("span", els =>
+      els
+        .map(el => el.innerText || "")
+        .filter(t =>
+          /просмотров/i.test(t) ||
+          /views/i.test(t)
+        )
+    );
 
-    if (await viewsLocator.count()) {
-      const txt = await viewsLocator.innerText();
-      console.log("    RAW views text:", txt);
-      viewsCount = parseIntSafe(txt);
+    console.log("    views candidates:", viewsCandidates);
+
+    const viewsNums = viewsCandidates
+      .map(txt => parseIntSafe(txt))
+      .filter(n => n !== null);
+
+    if (viewsNums.length) {
+      // берём максимальное число
+      viewsCount = Math.max(...viewsNums);
     }
   } catch (e) {
-    console.log("    Не смог прочитать просмотры:", e.message);
+    console.log("    Ошибка при парсе просмотров:", e.message);
   }
 
-  // ---------- COMMENTS: svg[aria-label="Ответ" | "Reply"] + ближайший span с числом ----------
   try {
-    const replyIcon = page
-      .locator('svg[aria-label="Ответ"], svg[aria-label="Reply"]')
-      .first();
+    // собираем тексты, где рядом упоминаются "ответ"/"коммент"/"repl"/"repl"
+    const commentsCandidates = await page.$$eval("span, div", els =>
+      els
+        .map(el => el.innerText || "")
+        .filter(t =>
+          /ответ/i.test(t) ||
+          /коммент/i.test(t) ||
+          /repl/i.test(t) ||
+          /repl(y|ies)/i.test(t)
+        )
+    );
 
-    if (await replyIcon.count()) {
-      const countSpan = replyIcon
-        .locator('xpath=following-sibling::span//span')
-        .first();
+    console.log("    comments candidates:", commentsCandidates);
 
-      if (await countSpan.count()) {
-        const txt = await countSpan.innerText();
-        console.log("    RAW comments text:", txt);
-        commentsCount = parseIntSafe(txt);
-      }
+    const commentsNums = commentsCandidates
+      .map(txt => parseIntSafe(txt))
+      .filter(n => n !== null);
+
+    if (commentsNums.length) {
+      commentsCount = Math.max(...commentsNums);
     }
   } catch (e) {
-    console.log("    Не смог прочитать комментарии:", e.message);
+    console.log("    Ошибка при парсе комментариев:", e.message);
   }
 
   console.log("    Метрики:", { viewsCount, commentsCount });
 
-  // ---------- ТЕКСТ ГОЛОВНОГО ПОСТА ----------
-
-  // По твоему HTML:
-  // <div class="x1a6qonq ... xmgb6t1">
-  //   <span ...>
-  //     <span>ТЕКСТ ПОСТА</span>
-  //     ...
-  //   </span>
-  // </div>
+  // ---------- ТЕКСТ ПОСТА (только головной пост) ----------
 
   let postText = "";
+
   try {
-    const postContainer = await page.$('div.x1a6qonq.xmgb6t1');
-    if (postContainer) {
-      // Берём только первый span > span, чтобы не цеплять "1/2", Translate и т.п.
-      const mainSpan = await postContainer.$('> span > span');
-      if (mainSpan) {
-        postText = (await mainSpan.innerText()).trim();
-      } else {
-        postText = (await postContainer.innerText()).trim();
-      }
+    // берём все текстовые куски из span[dir="auto"]
+    const textCandidates = await page.$$eval('span[dir="auto"]', els =>
+      els
+        .map(el => (el.innerText || "").trim())
+        .filter(t => t.length > 0)
+        .filter(t =>
+          !/^Translate$/i.test(t) &&         // выкидываем "Translate"
+          !/^Пустая строка$/i.test(t) &&     // выкидываем "Пустая строка"
+          !/^\d+\s*\/\s*\d+$/.test(t)        // выкидываем "1/2", "2/3" и т.п.
+        )
+    );
+
+    console.log("    text candidates (счёт):", textCandidates.length);
+
+    if (textCandidates.length) {
+      // берём самый длинный текст — это почти всегда сам пост
+      postText = textCandidates.sort((a, b) => b.length - a.length)[0];
     }
   } catch (e) {
-    console.log("    Не смог прочитать текст поста:", e.message);
+    console.log("    Ошибка при парсе текста поста:", e.message);
   }
 
-  console.log("    Текст поста (обрезан):", postText.slice(0, 80), "...");
-
-  // ---------- ЗАПИСЬ В ТАБЛИЦУ: ТОЛЬКО ПОСТ ----------
+  console.log("    Текст поста (обрезан):", postText.slice(0, 100), "...");
 
   const rowPost = {
     keyword,
     status: "пост",
     url: normalizedUrl,
-    author: "",           // при желании потом можно добить селектором ника
+    author: "",
     text: postText,
     views: viewsCount,
     comments: commentsCount
