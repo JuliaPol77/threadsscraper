@@ -13,7 +13,7 @@ const MAX_POSTS_PER_KEYWORD = 5;          // сколько постов на к
 const KEY_CSV_URL =
   `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(KEY_SHEET_NAME)}`;
 
-// парсер числа: собираем ВСЕ группы цифр (чтобы 142 356 → 142356)
+// ✅ парсер числа: собираем ВСЕ группы цифр (чтобы 142 356 → 142356)
 function parseIntSafe(str) {
   if (!str) return null;
   const allDigits = (str.match(/\d+/g) || []).join(""); // все группы цифр подряд
@@ -70,7 +70,7 @@ async function searchPosts(page, keyword) {
   return top;
 }
 
-// разбор одного поста + тред автора
+// разбор одного поста: метрики + текст
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
 
@@ -98,7 +98,7 @@ async function scrapeThread(page, keyword, url) {
     console.log("    Не смог прочитать просмотры:", e.message);
   }
 
-  // ---------- COMMENTS: svg[aria-label="Ответ" | "Reply"] + span span ----------
+  // ---------- COMMENTS: svg[aria-label="Ответ" | "Reply"] + ближайший span с числом ----------
   try {
     const replyIcon = page
       .locator('svg[aria-label="Ответ"], svg[aria-label="Reply"]')
@@ -121,75 +121,47 @@ async function scrapeThread(page, keyword, url) {
 
   console.log("    Метрики:", { viewsCount, commentsCount });
 
-  // ---------- ТЕКСТЫ: пост и комментарии автора ----------
+  // ---------- ТЕКСТ ГОЛОВНОГО ПОСТА ----------
 
-  // Текст головного поста: div.x1a6qonq.xmgb6t1 span span (первый внутренний span)
+  // По твоему HTML:
+  // <div class="x1a6qonq ... xmgb6t1">
+  //   <span ...>
+  //     <span>ТЕКСТ ПОСТА</span>
+  //     ...
+  //   </span>
+  // </div>
+
   let postText = "";
   try {
-    const postTextEl = await page.$('div.x1a6qonq.xmgb6t1 span span');
-    if (postTextEl) {
-      postText = (await postTextEl.innerText()).trim();
+    const postContainer = await page.$('div.x1a6qonq.xmgb6t1');
+    if (postContainer) {
+      // Берём только первый span > span, чтобы не цеплять "1/2", Translate и т.п.
+      const mainSpan = await postContainer.$('> span > span');
+      if (mainSpan) {
+        postText = (await mainSpan.innerText()).trim();
+      } else {
+        postText = (await postContainer.innerText()).trim();
+      }
     }
   } catch (e) {
     console.log("    Не смог прочитать текст поста:", e.message);
   }
 
-  // Тексты комментариев: div.x1a6qonq:not(.xmgb6t1) span span
-  let commentsTexts = [];
-  try {
-    const commentTextEls = await page.$$('div.x1a6qonq:not(.xmgb6t1) span span');
-    for (const el of commentTextEls) {
-      const txt = (await el.innerText()).trim();
-      if (txt) commentsTexts.push(txt);
-    }
-  } catch (e) {
-    console.log("    Не смог прочитать тексты комментариев:", e.message);
-  }
+  console.log("    Текст поста (обрезан):", postText.slice(0, 80), "...");
 
-  // ---------- ЗАПИСЬ В ТАБЛИЦУ ----------
+  // ---------- ЗАПИСЬ В ТАБЛИЦУ: ТОЛЬКО ПОСТ ----------
 
-  // строка для головного поста
-  if (postText) {
-    const rowPost = {
-      keyword,
-      status: "пост",
-      url: normalizedUrl,
-      author: "",           // можно добить позже, если найдём надёжный селектор
-      text: postText,
-      views: viewsCount,
-      comments: commentsCount
-    };
-    console.log("    Строка поста:", postText.slice(0, 60), "...");
-    await sendRow(rowPost);
-  } else {
-    // если текст поста не нашли — всё равно запишем метрики
-    const rowFallback = {
-      keyword,
-      status: "пост",
-      url: normalizedUrl,
-      author: "",
-      text: "",
-      views: viewsCount,
-      comments: commentsCount
-    };
-    console.log("    Пост без текста, записываю только метрики");
-    await sendRow(rowFallback);
-  }
+  const rowPost = {
+    keyword,
+    status: "пост",
+    url: normalizedUrl,
+    author: "",           // при желании потом можно добить селектором ника
+    text: postText,
+    views: viewsCount,
+    comments: commentsCount
+  };
 
-  // строки для комментариев
-  for (const cText of commentsTexts) {
-    const rowComment = {
-      keyword,
-      status: "комментарий",
-      url: normalizedUrl,
-      author: "",          // тоже можно будет подобрать селектор позже
-      text: cText,
-      views: viewsCount,
-      comments: commentsCount
-    };
-    console.log("    Строка комментария:", cText.slice(0, 60), "...");
-    await sendRow(rowComment);
-  }
+  await sendRow(rowPost);
 }
 
 (async () => {
