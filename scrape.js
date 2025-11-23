@@ -83,9 +83,12 @@ async function scrapeThread(page, keyword, url) {
   let commentsCount = null;
   let viewsCount = null;
 
-  // ---------- VIEWS: <span>8 925 просмотров</span> ----------
+  // ---------- VIEWS: <span>8 925 просмотров</span> или "8,925 views" ----------
   try {
-    const viewsLocator = page.locator('span:has-text("просмотров")').first();
+    const viewsLocator = page
+      .locator('span:has-text("просмотров"), span:has-text("views")')
+      .first();
+
     if (await viewsLocator.count()) {
       const txt = await viewsLocator.innerText();
       viewsCount = parseIntSafe(txt);
@@ -94,12 +97,22 @@ async function scrapeThread(page, keyword, url) {
     console.log("    Не смог прочитать просмотры:", e.message);
   }
 
-  // ---------- COMMENTS: svg[aria-label="Ответ"] + span span (внутренний span с числом) ----------
+  // ---------- COMMENTS: svg[aria-label="Ответ" | "Reply"] + span span ----------
   try {
-    const commentsLocator = page.locator('svg[aria-label="Ответ"] + span span').first();
-    if (await commentsLocator.count()) {
-      const txt = await commentsLocator.innerText();
-      commentsCount = parseIntSafe(txt);
+    const replyIcon = page
+      .locator('svg[aria-label="Ответ"], svg[aria-label="Reply"]')
+      .first();
+
+    if (await replyIcon.count()) {
+      // Ищем вложенный span с числом после иконки
+      const countSpan = replyIcon
+        .locator('xpath=following-sibling::span//span')
+        .first();
+
+      if (await countSpan.count()) {
+        const txt = await countSpan.innerText();
+        commentsCount = parseIntSafe(txt);
+      }
     }
   } catch (e) {
     console.log("    Не смог прочитать комментарии:", e.message);
