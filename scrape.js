@@ -13,11 +13,11 @@ const MAX_POSTS_PER_KEYWORD = 5;          // сколько постов на к
 const KEY_CSV_URL =
   `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(KEY_SHEET_NAME)}`;
 
-// простейший парсер "1 234", "1,234" → 1234
+// парсер числа: собираем ВСЕ группы цифр (чтобы 142 356 → 142356)
 function parseIntSafe(str) {
   if (!str) return null;
-  const digits = str.replace(/[^\d]/g, "");
-  return digits ? parseInt(digits, 10) : null;
+  const allDigits = (str.match(/\d+/g) || []).join(""); // все группы цифр подряд
+  return allDigits ? parseInt(allDigits, 10) : null;
 }
 
 // читаем ключевые слова из CSV
@@ -91,6 +91,7 @@ async function scrapeThread(page, keyword, url) {
 
     if (await viewsLocator.count()) {
       const txt = await viewsLocator.innerText();
+      console.log("    RAW views text:", txt);
       viewsCount = parseIntSafe(txt);
     }
   } catch (e) {
@@ -104,13 +105,13 @@ async function scrapeThread(page, keyword, url) {
       .first();
 
     if (await replyIcon.count()) {
-      // Ищем вложенный span с числом после иконки
       const countSpan = replyIcon
         .locator('xpath=following-sibling::span//span')
         .first();
 
       if (await countSpan.count()) {
         const txt = await countSpan.innerText();
+        console.log("    RAW comments text:", txt);
         commentsCount = parseIntSafe(txt);
       }
     }
@@ -120,13 +121,49 @@ async function scrapeThread(page, keyword, url) {
 
   console.log("    Метрики:", { viewsCount, commentsCount });
 
-  // ---------- ТРЕД: статьи автора ----------
-  const articles = await page.$$("article");
+  // ---------- ТЕКСТЫ: пост и комментарии автора ----------
 
-  // Если article не нашли — всё равно запишем одну строку с метриками
-  if (!articles.length) {
-    console.log("    Не нашёл article на странице, записываю только метрики");
-    const row = {
+  // Текст головного поста: div.x1a6qonq.xmgb6t1 span span (первый внутренний span)
+  let postText = "";
+  try {
+    const postTextEl = await page.$('div.x1a6qonq.xmgb6t1 span span');
+    if (postTextEl) {
+      postText = (await postTextEl.innerText()).trim();
+    }
+  } catch (e) {
+    console.log("    Не смог прочитать текст поста:", e.message);
+  }
+
+  // Тексты комментариев: div.x1a6qonq:not(.xmgb6t1) span span
+  let commentsTexts = [];
+  try {
+    const commentTextEls = await page.$$('div.x1a6qonq:not(.xmgb6t1) span span');
+    for (const el of commentTextEls) {
+      const txt = (await el.innerText()).trim();
+      if (txt) commentsTexts.push(txt);
+    }
+  } catch (e) {
+    console.log("    Не смог прочитать тексты комментариев:", e.message);
+  }
+
+  // ---------- ЗАПИСЬ В ТАБЛИЦУ ----------
+
+  // строка для головного поста
+  if (postText) {
+    const rowPost = {
+      keyword,
+      status: "пост",
+      url: normalizedUrl,
+      author: "",           // можно добить позже, если найдём надёжный селектор
+      text: postText,
+      views: viewsCount,
+      comments: commentsCount
+    };
+    console.log("    Строка поста:", postText.slice(0, 60), "...");
+    await sendRow(rowPost);
+  } else {
+    // если текст поста не нашли — всё равно запишем метрики
+    const rowFallback = {
       keyword,
       status: "пост",
       url: normalizedUrl,
@@ -135,44 +172,23 @@ async function scrapeThread(page, keyword, url) {
       views: viewsCount,
       comments: commentsCount
     };
-    await sendRow(row);
-    return;
+    console.log("    Пост без текста, записываю только метрики");
+    await sendRow(rowFallback);
   }
 
-  // Пытаемся достать ник автора из первого article
-  const authorLinkEl = await articles[0].$('a[href*="/@"]');
-  const authorHandle = authorLinkEl
-    ? (await authorLinkEl.innerText()).trim()
-    : "";
-
-  console.log("    Автор:", authorHandle);
-
-  for (let i = 0; i < articles.length; i++) {
-    const article = articles[i];
-
-    // Проверяем, что это пост того же автора
-    const handleEl = await article.$('a[href*="/@"]');
-    const handle = handleEl ? (await handleEl.innerText()).trim() : "";
-
-    if (authorHandle && handle !== authorHandle) {
-      continue; // пропускаем чужие ответы
-    }
-
-    const fullText = (await article.innerText()).trim();
-    const status = i === 0 ? "пост" : "комментарий";
-
-    const row = {
+  // строки для комментариев
+  for (const cText of commentsTexts) {
+    const rowComment = {
       keyword,
-      status,
+      status: "комментарий",
       url: normalizedUrl,
-      author: authorHandle,
-      text: fullText,
+      author: "",          // тоже можно будет подобрать селектор позже
+      text: cText,
       views: viewsCount,
       comments: commentsCount
     };
-
-    console.log("    Строка:", status, fullText.slice(0, 40), "...");
-    await sendRow(row);
+    console.log("    Строка комментария:", cText.slice(0, 60), "...");
+    await sendRow(rowComment);
   }
 }
 
