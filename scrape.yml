@@ -1,0 +1,28 @@
+name: Threads scrape by keywords
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # каждый день в 07:00 UTC
+  workflow_dispatch: {}    # можно запустить вручную в Actions
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run scraper
+        run: npm run scrape
