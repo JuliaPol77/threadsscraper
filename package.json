@@ -1,0 +1,11 @@
+{
+  "name": "threads-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "scrape": "node scrape.js"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}
