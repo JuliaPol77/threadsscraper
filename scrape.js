@@ -26,9 +26,11 @@ async function readKeywords() {
   const csv = await res.text();
   const lines = csv.trim().split("\n");
   lines.shift(); // убираем заголовок "keyword"
+
   return lines
     .map(l => l.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map(l => l.replace(/^"+|"+$/g, "")); // убираем лишние кавычки по краям
 }
 
 // отправка строки в Apps Script
@@ -68,7 +70,11 @@ async function searchPosts(page, keyword) {
 // разбор одного поста + тред автора
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
-  await page.goto(url, { waitUntil: "networkidle" });
+
+  // переписываем домен threads.com → www.threads.net
+  const normalizedUrl = url.replace("https://www.threads.com", "https://www.threads.net");
+
+  await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
   // ---------- МЕТРИКИ views / comments ----------
@@ -94,8 +100,20 @@ async function scrapeThread(page, keyword, url) {
 
   // ---------- ТРЕД: статьи автора ----------
   const articles = await page.$$("article");
+
+  // Если article не нашли — всё равно запишем одну строку с метриками
   if (!articles.length) {
-    console.log("    Не нашёл article на странице");
+    console.log("    Не нашёл article на странице, записываю только метрики");
+    const row = {
+      keyword,
+      status: "пост",
+      url: normalizedUrl,
+      author: "",
+      text: "",
+      views: viewsCount,
+      comments: commentsCount
+    };
+    await sendRow(row);
     return;
   }
 
@@ -125,7 +143,7 @@ async function scrapeThread(page, keyword, url) {
     const row = {
       keyword,
       status,
-      url,
+      url: normalizedUrl,
       author: authorHandle,
       text: fullText,
       views: viewsCount,
