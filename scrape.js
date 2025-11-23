@@ -1,7 +1,7 @@
 import { chromium } from "@playwright/test";
 
 // >>> ВСТАВЬ СЮДА СВОЙ ID ТАБЛИЦЫ
-const SPREADSHEET_ID = "1759984230";
+const SPREADSHEET_ID = "1jl9gmFElhLw3i-eEPg2tdf6XYNL9xKWyDJuAiaRG-I0";
 
 // >>> ВСТАВЬ СЮДА СВОЙ WEBHOOK ИЗ APPS SCRIPT
 const APP_SCRIPT_WEBHOOK = "https://script.google.com/macros/s/AKfycbzJ6_YlOThPmeD9rRT6mhr_zWiHzokQLr5AaQ9Uxw_XwBz0VY8YUBFTKY-3SegLquIP/exec";
