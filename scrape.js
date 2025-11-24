@@ -16,14 +16,30 @@ const KEY_CSV_URL =
 async function readKeywords() {
   const res = await fetch(KEY_CSV_URL);
   const csv = await res.text();
-  const lines = csv.trim().split("\n");
-  lines.shift(); // заголовок
 
-  return lines
-    .map(l => l.trim())
+  const lines = csv.trim().split("\n");
+  lines.shift(); // убираем заголовок
+
+  const keywords = lines
+    .map(line => {
+      // берём только первую колонку (первый столбец A)
+      const firstCell = line.split(",")[0] || "";
+      return firstCell.trim().replace(/^"+|"+$/g, "");
+    })
     .filter(Boolean)
-    .map(l => l.replace(/^"+|"+$/g, ""));
+    // выкидываем очевидный мусор из HTML/JS
+    .filter(k =>
+      !k.includes("<") &&
+      !k.includes(">") &&
+      !k.includes("</script") &&
+      !k.includes("/*") &&
+      !k.toLowerCase().includes("sourcemappingurl")
+    );
+
+  console.log("Ключи из таблицы (после фильтра):", keywords);
+  return keywords;
 }
+
 
 // отправка строки в Google Sheets
 async function sendRow(rowObj) {
