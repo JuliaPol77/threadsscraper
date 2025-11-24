@@ -69,48 +69,61 @@ async function scrapeThread(page, keyword, url) {
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  // ---------- ПРОСМОТРЫ ----------
+   // ---------- ПРОСМОТРЫ ----------
   const { viewsCount } = await page.evaluate(() => {
-    let views = null;
-
-    const spans = Array.from(document.querySelectorAll("span"));
-    const texts = spans
-      .map(el => (el.innerText || "").trim())
-      .filter(t => t.length > 0);
-
-    const candidates = texts.filter(t =>
-      /просмотр/i.test(t) || /views?/i.test(t)
-    );
-
-    console.log("    [views] candidates:", candidates);
-
-    for (const t of candidates) {
-      const groups = t.match(/\d+/g); // все группы цифр: ["35","754"]
-      if (!groups || !groups.length) continue;
+    function parseViewsText(t) {
+      if (!t) return null;
+      const groups = t.match(/\d+/g); // все группы цифр, например ["35","754"]
+      if (!groups || !groups.length) return null;
 
       let numStr;
-
       if (groups.length === 1) {
-        numStr = groups[0]; // просто "357"
+        numStr = groups[0];
       } else if (groups.length === 2 && groups[1].length === 3) {
-        // формат типа "35 754" → "35754"
+        // формат "35 754" → "35754"
         numStr = groups[0] + groups[1];
       } else {
-        // на всякий случай — склеиваем всё
+        // на всякий случай склеиваем всё
         numStr = groups.join("");
       }
 
       const num = parseInt(numStr, 10);
-      if (!Number.isNaN(num)) {
-        console.log("    [views] parsed:", t, "=>", num);
-        if (views === null || num > views) {
-          views = num;
+      return Number.isNaN(num) ? null : num;
+    }
+
+    let views = null;
+
+    // 1) Пытаемся взять "правильный" блок с просмотрами по классу контейнера
+    const primaryEl = document.querySelector('div.x1b12d3d span span');
+    if (primaryEl) {
+      const t = (primaryEl.textContent || "").trim();
+      const n = parseViewsText(t);
+      if (n !== null) {
+        views = n;
+      }
+    }
+
+    // 2) Fallback — общий скан по всему тексту, если вдруг не нашли primaryEl
+    if (views === null) {
+      const spans = Array.from(document.querySelectorAll("span"));
+      const texts = spans
+        .map(el => (el.textContent || "").trim())
+        .filter(t => t.length > 0)
+        .filter(t => /просмотр/i.test(t) || /views?/i.test(t));
+
+      for (const t of texts) {
+        const n = parseViewsText(t);
+        if (n !== null) {
+          if (views === null || n > views) {
+            views = n;
+          }
         }
       }
     }
 
     return { viewsCount: views };
   });
+
 
   console.log("    Просмотры (итог):", viewsCount);
 
