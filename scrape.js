@@ -61,7 +61,7 @@ async function searchPosts(page, keyword) {
   return top;
 }
 
-// разбор одного поста: пост + подряд идущие КОММЕНТЫ АВТОРА + просмотры
+// разбор одного поста: пост + подряд комменты автора + просмотры
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
 
@@ -69,25 +69,26 @@ async function scrapeThread(page, keyword, url) {
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  // ---------- МЕТРИКА ПРОСМОТРОВ ----------
+  // ---------- ПРОСМОТРЫ (тупо, но надёжно) ----------
   const { viewsCount } = await page.evaluate(() => {
-    let views = null;
+    let views: number | null = null;
 
     const spans = Array.from(document.querySelectorAll("span"));
-    for (const el of spans) {
-      const t = (el.textContent || "").trim();
-      if (!t) continue;
+    const texts = spans
+      .map(el => (el.innerText || "").trim())
+      .filter(t => t.length > 0);
 
-      // ловим "142 356 просмотров" или "142,356 views"
-      const m = t.match(/(\d[\d\s\u00A0.,]*)(?=\s*(просмотров|просмотра|просмотры|просмотр|views?|Views?))/i);
-      if (m) {
-        const numStr = m[1].replace(/[^\d]/g, ""); // убираем пробелы, запятые и т.п.
-        if (!numStr) continue;
-        const num = parseInt(numStr, 10);
-        if (!Number.isNaN(num)) {
-          if (views === null || num > views) {
-            views = num; // берём максимальное значение из кандидатов
-          }
+    const candidates = texts.filter(t =>
+      /просмотр/i.test(t) || /views?/i.test(t)
+    );
+
+    for (const t of candidates) {
+      const digits = t.replace(/[^\d]/g, "");
+      if (!digits) continue;
+      const num = parseInt(digits, 10);
+      if (!Number.isNaN(num)) {
+        if (views === null || num > views) {
+          views = num;
         }
       }
     }
@@ -97,7 +98,7 @@ async function scrapeThread(page, keyword, url) {
 
   console.log("    Просмотры:", viewsCount);
 
-  // ---------- АВТОР И ТЕКСТЫ (как в рабочей версии) ----------
+  // ---------- АВТОР И ТЕКСТЫ (как в рабочем варианте) ----------
 
   // автор из URL: https://www.threads.net/@alekseybobyr/post/... -> alekseybobyr
   const m = normalizedUrl.match(/\/@([^/]+)/);
@@ -105,10 +106,10 @@ async function scrapeThread(page, keyword, url) {
   const authorField = authorHandle ? `@${authorHandle}` : "";
 
   const { postText, comments } = await page.evaluate((authorHandle) => {
-    function getBlockText(block) {
+    function getBlockText(block: Element): string {
       const spans = Array.from(block.querySelectorAll('span[dir="auto"]'));
       const texts = spans
-        .map(el => (el.innerText || "").trim())
+        .map(el => (el as HTMLElement).innerText.trim())
         .filter(t => t.length > 0)
         .filter(t => {
           if (/^Translate$/i.test(t)) return false;
@@ -122,15 +123,15 @@ async function scrapeThread(page, keyword, url) {
     }
 
     // ищем ссылку на автора ТОЛЬКО В БЛИЖАЙШИХ ПРЕДКАХ
-    function isBlockByAuthor(block, handle) {
+    function isBlockByAuthor(block: Element, handle: string): boolean {
       if (!handle) return false;
       const needle = `/@${handle}`;
 
-      let node = block;
+      let node: Element | null = block;
       for (let depth = 0; depth < 4 && node && node !== document.body; depth++) {
         const links = Array.from(node.querySelectorAll('a[href^="/@"]'));
         for (const a of links) {
-          const href = a.getAttribute("href") || "";
+          const href = (a.getAttribute("href") || "");
           if (href.includes(needle)) {
             return true;
           }
@@ -140,7 +141,6 @@ async function scrapeThread(page, keyword, url) {
       return false;
     }
 
-    // собираем текстовые блоки
     const rawBlocks = Array.from(document.querySelectorAll("div.x1a6qonq"));
     const items = rawBlocks.map(block => {
       const full = getBlockText(block);
@@ -150,7 +150,7 @@ async function scrapeThread(page, keyword, url) {
     }).filter(it => it.full && it.hasCyr);
 
     if (!items.length) {
-      return { postText: "", comments: [] };
+      return { postText: "", comments: [] as string[] };
     }
 
     // пост = первый кириллический блок автора, иначе первый кириллический
@@ -158,7 +158,7 @@ async function scrapeThread(page, keyword, url) {
     if (postIndex === -1) postIndex = 0;
 
     const postText = items[postIndex].full;
-    const comments = [];
+    const comments: string[] = [];
 
     // после поста: берём ТОЛЬКО подряд идущие блоки автора
     for (let i = postIndex + 1; i < items.length; i++) {
@@ -166,7 +166,6 @@ async function scrapeThread(page, keyword, url) {
       if (it.isAuthor) {
         comments.push(it.full);
       } else {
-        // первый русский блок НЕ автора — стоп
         break;
       }
     }
