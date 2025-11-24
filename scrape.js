@@ -69,51 +69,41 @@ async function scrapeThread(page, keyword, url) {
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-   // ---------- ПРОСМОТРЫ (как строка "73 141") ----------
-  const { viewsCount } = await page.evaluate(() => {
-    function extractViewsText(t) {
-      if (!t) return null;
-      // Берём первую группу "цифры + пробелы": "73 141"
-      const m = t.match(/([\d\s\u00A0]+)/);
-      if (!m) return null;
-      // Заменяем неразрывные пробелы на обычные и подрезаем края
-      return m[1].replace(/\u00A0/g, " ").trim();
+  // ---------- ПРОСМОТРЫ (сырая строка "73 141 просмотра") ----------
+const { viewsText } = await page.evaluate(() => {
+  let raw = null;
+
+  // 1) Пытаемся вытащить просмотры из основного контейнера
+  const container = document.querySelector("div.x1b12d3d");
+  if (container) {
+    const spanWithViews = Array.from(container.querySelectorAll("span"))
+      .map(el => (el.textContent || "").trim())
+      .find(t => /просмотр/i.test(t) || /views?/i.test(t));
+
+    if (spanWithViews) {
+      raw = spanWithViews; // например: "73 141 просмотра"
     }
+  }
 
-    let views = null;
+  // 2) Fallback: если контейнер не нашли — ищем первый span с "просмотр"
+  if (!raw) {
+    const spans = Array.from(document.querySelectorAll("span"));
+    const candidate = spans
+      .map(el => (el.textContent || "").trim())
+      .find(t => /просмотр/i.test(t) || /views?/i.test(t));
 
-    // 1) Пытаемся взять главный блок по контейнеру просмотров
-    const primaryEl = document.querySelector('div.x1b12d3d span span');
-    if (primaryEl) {
-      const t = (primaryEl.textContent || "").trim();
-      const v = extractViewsText(t);
-      if (v) {
-        views = v; // например "73 141"
-      }
-    }
+    if (candidate) raw = candidate;
+  }
 
-    // 2) Fallback: если верстка поменялась и primaryEl не нашли —
-    // ищем любой span с "просмотр"/"views"
-    if (views === null) {
-      const spans = Array.from(document.querySelectorAll("span"));
-      const texts = spans
-        .map(el => (el.textContent || "").trim())
-        .filter(t => t.length > 0)
-        .filter(t => /просмотр/i.test(t) || /views?/i.test(t));
+  // ВАЖНО: возврат именно viewsText
+  return { viewsText: raw };
+});
 
-      for (const t of texts) {
-        const v = extractViewsText(t);
-        if (v) {
-          views = v;
-          break;
-        }
-      }
-    }
+console.log("    Просмотры RAW:", viewsText);
 
-    return { viewsCount: views };
-  });
+// записываем именно строку, без парсинга
+const viewsCount = viewsText || null;
 
-  console.log("    Просмотры (итог):", viewsCount);
 
   // ---------- АВТОР И ТЕКСТЫ (рабочая логика) ----------
 
