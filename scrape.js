@@ -69,41 +69,33 @@ async function scrapeThread(page, keyword, url) {
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-   // ---------- ПРОСМОТРЫ ----------
+  // ---------- ПРОСМОТРЫ ----------
   const { viewsCount } = await page.evaluate(() => {
-    function parseViewsText(t) {
+    function parseViewsFromText(t) {
       if (!t) return null;
-      const groups = t.match(/\d+/g); // все группы цифр, например ["35","754"]
-      if (!groups || !groups.length) return null;
-
-      let numStr;
-      if (groups.length === 1) {
-        numStr = groups[0];
-      } else if (groups.length === 2 && groups[1].length === 3) {
-        // формат "35 754" → "35754"
-        numStr = groups[0] + groups[1];
-      } else {
-        // на всякий случай склеиваем всё
-        numStr = groups.join("");
-      }
-
-      const num = parseInt(numStr, 10);
+      // Ищем одну самую длинную "цифровую" группу с пробелами: "73 141"
+      const m = t.match(/(\d[\d\s\u00A0]*)/);
+      if (!m) return null;
+      const digitsOnly = m[1].replace(/[^\d]/g, ""); // "73 141" → "73141"
+      if (!digitsOnly) return null;
+      const num = parseInt(digitsOnly, 10);
       return Number.isNaN(num) ? null : num;
     }
 
     let views = null;
 
-    // 1) Пытаемся взять "правильный" блок с просмотрами по классу контейнера
+    // 1) Пытаемся взять "правильный" блок по контейнеру просмотров
     const primaryEl = document.querySelector('div.x1b12d3d span span');
     if (primaryEl) {
       const t = (primaryEl.textContent || "").trim();
-      const n = parseViewsText(t);
+      const n = parseViewsFromText(t);
       if (n !== null) {
         views = n;
       }
     }
 
-    // 2) Fallback — общий скан по всему тексту, если вдруг не нашли primaryEl
+    // 2) Fallback: если вдруг поменяли верстку и primaryEl не нашли —
+    // пробегаемся по всем span с "просмотр"/"views"
     if (views === null) {
       const spans = Array.from(document.querySelectorAll("span"));
       const texts = spans
@@ -112,7 +104,7 @@ async function scrapeThread(page, keyword, url) {
         .filter(t => /просмотр/i.test(t) || /views?/i.test(t));
 
       for (const t of texts) {
-        const n = parseViewsText(t);
+        const n = parseViewsFromText(t);
         if (n !== null) {
           if (views === null || n > views) {
             views = n;
@@ -123,6 +115,7 @@ async function scrapeThread(page, keyword, url) {
 
     return { viewsCount: views };
   });
+
 
 
   console.log("    Просмотры (итог):", viewsCount);
