@@ -9,24 +9,23 @@ const APP_SCRIPT_WEBHOOK = "https://script.google.com/macros/s/AKfycbzJ6_YlOThPm
 const KEY_SHEET_NAME = "ключи";
 const MAX_POSTS_PER_KEYWORD = 5;
 
-// CSV URL для листа "ключи"
 const KEY_CSV_URL =
   `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(KEY_SHEET_NAME)}`;
 
-// читаем ключевые слова из CSV
+// читаем ключевые слова
 async function readKeywords() {
   const res = await fetch(KEY_CSV_URL);
   const csv = await res.text();
   const lines = csv.trim().split("\n");
-  lines.shift(); // убираем заголовок "keyword"
+  lines.shift(); // заголовок
 
   return lines
     .map(l => l.trim())
     .filter(Boolean)
-    .map(l => l.replace(/^"+|"+$/g, "")); // убираем лишние кавычки по краям
+    .map(l => l.replace(/^"+|"+$/g, ""));
 }
 
-// отправка строки в Apps Script
+// отправка строки в Google Sheets
 async function sendRow(rowObj) {
   rowObj.ts = new Date().toISOString();
 
@@ -62,7 +61,7 @@ async function searchPosts(page, keyword) {
   return top;
 }
 
-// разбор одного поста: СБОР ВСЕГО ТЕКСТА ПОСТА ИЗ НЕСКОЛЬКИХ SPAN
+// разбор одного поста: БЕРЁМ ТОЛЬКО ПЕРВЫЙ div.x1a6qonq С КИРИЛЛИЦЕЙ И СКЛЕИВАЕМ ВСЁ
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
 
@@ -71,16 +70,12 @@ async function scrapeThread(page, keyword, url) {
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  // ---------- ТЕКСТ ГОЛОВНОГО ПОСТА ЦЕЛИКОМ ----------
-
   const postText = await page.evaluate(() => {
-    // 1) Ищем ВСЕ контейнеры постов/комментов
+    // Ищем ВСЕ блоки-посты/комменты
     const blocks = Array.from(document.querySelectorAll("div.x1a6qonq"));
 
-    const candidates = [];
-
     for (const block of blocks) {
-      // внутри контейнера собираем span[dir="auto"]
+      // внутри блока собираем span[dir="auto"]
       const spans = Array.from(block.querySelectorAll('span[dir="auto"]'));
       const texts = spans
         .map(el => (el.innerText || "").trim())
@@ -88,28 +83,22 @@ async function scrapeThread(page, keyword, url) {
         .filter(t => {
           if (/^Translate$/i.test(t)) return false;
           if (/^Пустая строка$/i.test(t)) return false;
-          if (/^\d+\s*\/\s*\d+$/.test(t)) return false; // 1/2, 2/3
+          if (/^\d+\s*\/\s*\d+$/.test(t)) return false; // 1/2, 2/3 и т.п.
           return true;
         });
 
       if (!texts.length) continue;
 
       const full = texts.join("\n");
-      candidates.push(full);
+
+      // берём ПЕРВЫЙ блок, в котором есть кириллица — это и будет пост
+      if (/[А-Яа-яЁё]/.test(full)) {
+        return full;
+      }
     }
 
-    if (!candidates.length) {
-      return "";
-    }
-
-    // отдаём приоритет блоку с кириллицей и максимальной длиной
-    const withCyrillic = candidates.filter(t => /[А-Яа-яЁё]/.test(t));
-    if (withCyrillic.length) {
-      return withCyrillic.sort((a, b) => b.length - a.length)[0];
-    }
-
-    // если почему-то нет кириллицы — берём просто самый длинный блок
-    return candidates.sort((a, b) => b.length - a.length)[0];
+    // если кириллицы нет — вообще ничего не возвращаем
+    return "";
   });
 
   console.log("    Текст поста (обрезан):", (postText || "").slice(0, 150), "...");
