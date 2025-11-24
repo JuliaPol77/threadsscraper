@@ -5,6 +5,7 @@ const SPREADSHEET_ID = "1jl9gmFElhLw3i-eEPg2tdf6XYNL9xKWyDJuAiaRG-I0";
 
 // >>> ВСТАВЬ СЮДА СВОЙ WEBHOOK ИЗ APPS SCRIPT
 const APP_SCRIPT_WEBHOOK = "https://script.google.com/macros/s/AKfycbzJ6_YlOThPmeD9rRT6mhr_zWiHzokQLr5AaQ9Uxw_XwBz0VY8YUBFTKY-3SegLquIP/exec";
+
 const KEY_SHEET_NAME = "ключи";
 const MAX_POSTS_PER_KEYWORD = 5;
 
@@ -60,13 +61,43 @@ async function searchPosts(page, keyword) {
   return top;
 }
 
-// разбор одного поста: пост + подряд идущие КОММЕНТЫ АВТОРА
+// разбор одного поста: пост + подряд идущие КОММЕНТЫ АВТОРА + просмотры
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
 
   const normalizedUrl = url.replace("https://www.threads.com", "https://www.threads.net");
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
+
+  // ---------- МЕТРИКА ПРОСМОТРОВ ----------
+  const { viewsCount } = await page.evaluate(() => {
+    let views = null;
+
+    const spans = Array.from(document.querySelectorAll("span"));
+    for (const el of spans) {
+      const t = (el.textContent || "").trim();
+      if (!t) continue;
+
+      // ловим "142 356 просмотров" или "142,356 views"
+      const m = t.match(/(\d[\d\s\u00A0.,]*)(?=\s*(просмотров|просмотра|просмотры|просмотр|views?|Views?))/i);
+      if (m) {
+        const numStr = m[1].replace(/[^\d]/g, ""); // убираем пробелы, запятые и т.п.
+        if (!numStr) continue;
+        const num = parseInt(numStr, 10);
+        if (!Number.isNaN(num)) {
+          if (views === null || num > views) {
+            views = num; // берём максимальное значение из кандидатов
+          }
+        }
+      }
+    }
+
+    return { viewsCount: views };
+  });
+
+  console.log("    Просмотры:", viewsCount);
+
+  // ---------- АВТОР И ТЕКСТЫ (как в рабочей версии) ----------
 
   // автор из URL: https://www.threads.net/@alekseybobyr/post/... -> alekseybobyr
   const m = normalizedUrl.match(/\/@([^/]+)/);
@@ -90,13 +121,12 @@ async function scrapeThread(page, keyword, url) {
       return texts.join("\n");
     }
 
-    // ВАЖНО: ищем ссылку на автора ТОЛЬКО В БЛИЖАЙШИХ ПРЕДКАХ
+    // ищем ссылку на автора ТОЛЬКО В БЛИЖАЙШИХ ПРЕДКАХ
     function isBlockByAuthor(block, handle) {
       if (!handle) return false;
       const needle = `/@${handle}`;
 
       let node = block;
-      // ограничиваем глубину, чтобы не достать общий верхний хедер
       for (let depth = 0; depth < 4 && node && node !== document.body; depth++) {
         const links = Array.from(node.querySelectorAll('a[href^="/@"]'));
         for (const a of links) {
@@ -136,7 +166,7 @@ async function scrapeThread(page, keyword, url) {
       if (it.isAuthor) {
         comments.push(it.full);
       } else {
-        // первый русский блок НЕ автора — стоп, дальше по треду не идём
+        // первый русский блок НЕ автора — стоп
         break;
       }
     }
@@ -155,7 +185,7 @@ async function scrapeThread(page, keyword, url) {
     url: normalizedUrl,
     author: authorField,
     text: postText || "",
-    views: null,
+    views: viewsCount ?? null,
     comments: null
   };
   await sendRow(rowPost);
@@ -168,7 +198,7 @@ async function scrapeThread(page, keyword, url) {
       url: normalizedUrl,
       author: authorField,
       text: cText,
-      views: null,
+      views: viewsCount ?? null,
       comments: null
     };
     await sendRow(rowComment);
@@ -198,4 +228,3 @@ async function scrapeThread(page, keyword, url) {
     process.exit(1);
   }
 })();
-
