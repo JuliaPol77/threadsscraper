@@ -9,7 +9,6 @@ const APP_SCRIPT_WEBHOOK = "https://script.google.com/macros/s/AKfycbzJ6_YlOThPm
 const KEY_SHEET_NAME = "ключи";
 const MAX_POSTS_PER_KEYWORD = 5;
 
-// CSV URL для листа "ключи"
 const KEY_CSV_URL =
   `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(KEY_SHEET_NAME)}`;
 
@@ -62,7 +61,7 @@ async function searchPosts(page, keyword) {
   return top;
 }
 
-// разбор одного поста: пост + подряд идущие комменты автора
+// разбор одного поста: пост + подряд идущие комменты АВТОРА
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
 
@@ -76,7 +75,6 @@ async function scrapeThread(page, keyword, url) {
   const authorField = authorHandle ? `@${authorHandle}` : "";
 
   const { postText, comments } = await page.evaluate((authorHandle) => {
-    // вспомогательная функция: собрать текст блока целиком
     function getBlockText(block) {
       const spans = Array.from(block.querySelectorAll('span[dir="auto"]'));
       const texts = spans
@@ -93,60 +91,42 @@ async function scrapeThread(page, keyword, url) {
       return texts.join("\n");
     }
 
-    // проверка: есть ли у блока/его предков ссылка на автора
-    function isBlockByAuthor(block, handle) {
-      if (!handle) return false;
-      let node = block;
-      const needle = `/@${handle}`;
-      while (node && node !== document.body) {
-        const links = Array.from(node.querySelectorAll('a[href^="/@"]'));
-        for (const a of links) {
-          const href = a.getAttribute("href") || "";
-          if (href.includes(needle)) {
-            return true;
-          }
-        }
-        node = node.parentElement;
-      }
-      return false;
+    // собираем список блоков с текстом и инфой об авторе
+    const rawBlocks = Array.from(document.querySelectorAll("div.x1a6qonq"));
+    const items = rawBlocks.map(block => {
+      const full = getBlockText(block);
+      const hasCyr = /[А-Яа-яЁё]/.test(full);
+
+      const links = Array.from(block.querySelectorAll('a[href^="/@"]'));
+      const hrefs = links.map(a => a.getAttribute("href") || "");
+      const isAuthor = authorHandle
+        ? hrefs.some(h => h.includes(`/@${authorHandle}`))
+        : false;
+
+      return { full, hasCyr, isAuthor };
+    }).filter(it => it.full && it.hasCyr);
+
+    if (!items.length) {
+      return { postText: "", comments: [] };
     }
 
-    const blocks = Array.from(document.querySelectorAll("div.x1a6qonq"));
+    // ищем индекс поста: первый кириллический блок автора, иначе первый кириллический
+    let postIndex = items.findIndex(it => it.isAuthor);
+    if (postIndex === -1) postIndex = 0;
 
-    let postText = "";
+    const postText = items[postIndex].full;
     const comments = [];
-    let started = false; // уже нашли пост автора
-    let stopped = false; // встретили чужой русский блок после поста
 
-    for (const block of blocks) {
-      if (stopped) break;
+    // дальше идём только по блокам после поста
+    for (let i = postIndex + 1; i < items.length; i++) {
+      const it = items[i];
 
-      const full = getBlockText(block);
-      if (!full) continue;
-
-      // интересуют только блоки с кириллицей
-      if (!/[А-Яа-яЁё]/.test(full)) continue;
-
-      const byAuthor = isBlockByAuthor(block, authorHandle);
-
-      if (!started) {
-        // ещё не нашли пост автора
-        if (byAuthor) {
-          postText = full;   // это головной пост
-          started = true;
-        } else {
-          // чужие блоки до поста игнорируем
-          continue;
-        }
+      if (it.isAuthor) {
+        // комментарий автора — добавляем
+        comments.push(it.full);
       } else {
-        // уже нашли пост, смотрим следующие русские блоки
-        if (byAuthor) {
-          comments.push(full); // комментарий автора
-        } else {
-          // первый русский блок не автора -> останавливаемся
-          stopped = true;
-          break;
-        }
+        // первый русский блок НЕ автора — останавливаемся и выходим
+        break;
       }
     }
 
@@ -157,9 +137,7 @@ async function scrapeThread(page, keyword, url) {
   console.log("    Текст поста (обрезан):", (postText || "").slice(0, 150), "...");
   console.log("    Комментов автора найдено:", comments.length);
 
-  // ---------- запись в таблицу ----------
-
-  // строка для поста
+  // ---------- запись поста ----------
   const rowPost = {
     keyword,
     status: "пост",
@@ -171,7 +149,7 @@ async function scrapeThread(page, keyword, url) {
   };
   await sendRow(rowPost);
 
-  // строки для комментариев автора (если есть)
+  // ---------- запись ТОЛЬКО авторских комментариев ----------
   for (const cText of comments) {
     const rowComment = {
       keyword,
