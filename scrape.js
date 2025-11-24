@@ -101,8 +101,40 @@ const { viewsText } = await page.evaluate(() => {
 
 console.log("    Просмотры RAW:", viewsText);
 
-// записываем именно строку, без парсинга
-const viewsCount = viewsText || null;
+// -------- Конвертация текстовых просмотров в число --------
+let viewsCount = null;
+
+if (viewsText) {
+  const t = viewsText.toLowerCase();
+
+  // 1) K / M формат (английский)
+  const matchKM = t.match(/([\d.,]+)\s*([km])/i);
+  if (matchKM) {
+    let num = parseFloat(matchKM[1].replace(",", "."));
+    const unit = matchKM[2];
+
+    if (unit === "k") {
+      viewsCount = Math.round(num * 1000);     // 56.1K → 56100
+    } else if (unit === "m") {
+      viewsCount = Math.round(num * 1000000);  // 1.2M → 1200000
+    }
+  }
+
+  // 2) Обычное число с пробелами: "35 747"
+  if (viewsCount === null) {
+    const digits = t.match(/(\d[\d\s]*)/);
+    if (digits) {
+      const clean = digits[1].replace(/\s+/g, "");
+      const num = parseInt(clean, 10);
+      if (!isNaN(num)) {
+        viewsCount = num;
+      }
+    }
+  }
+}
+
+console.log("    Просмотры (числом):", viewsCount);
+
 
 
   // ---------- АВТОР И ТЕКСТЫ (рабочая логика) ----------
