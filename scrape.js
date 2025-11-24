@@ -13,7 +13,7 @@ const MAX_POSTS_PER_KEYWORD = 5;
 const KEY_CSV_URL =
   `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(KEY_SHEET_NAME)}`;
 
-// читаем ключевые слова из CSV
+// читаем ключевые слова из CSV (то, что уже работает)
 async function readKeywords() {
   const res = await fetch(KEY_CSV_URL);
   const csv = await res.text();
@@ -26,7 +26,7 @@ async function readKeywords() {
     .map(l => l.replace(/^"+|"+$/g, "")); // убираем лишние кавычки по краям
 }
 
-// отправка строки в Apps Script
+// отправка строки в Apps Script (у тебя уже работает)
 async function sendRow(rowObj) {
   rowObj.ts = new Date().toISOString();
 
@@ -40,7 +40,7 @@ async function sendRow(rowObj) {
   console.log("    Ответ Apps Script:", res.status, text);
 }
 
-// поиск постов по ключевому слову на threads.com
+// поиск постов по ключу
 async function searchPosts(page, keyword) {
   const searchUrl =
     `https://www.threads.com/search?q=${encodeURIComponent(keyword)}`;
@@ -49,7 +49,6 @@ async function searchPosts(page, keyword) {
   await page.goto(searchUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  // Берём все <a>, где href содержит "/post/"
   const links = await page.$$eval('a[href*="/post/"]', els =>
     Array.from(new Set(
       els
@@ -63,7 +62,7 @@ async function searchPosts(page, keyword) {
   return top;
 }
 
-// разбор одного поста: метрики + текст поста
+// разбор одного поста: ТОЛЬКО текст головного поста, БЕЗ метрик и комментов
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
 
@@ -72,93 +71,56 @@ async function scrapeThread(page, keyword, url) {
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  // ---------- МЕТРИКИ ЧЕРЕЗ page.evaluate (без Playwright-селекторов) ----------
-
-  const { viewsCount, commentsCount } = await page.evaluate(() => {
-    let views = null;
-    let comments = null;
-
-    // Просмотры: ищем текст вида "8 925 просмотров" или "8,925 views"
-    const spans = Array.from(document.querySelectorAll("span"));
-    for (const el of spans) {
-      const t = (el.textContent || "").trim();
-      if (!t) continue;
-
-      const m = t.match(/(\d[\d\s\u00A0]*)(?=\s*(просмотров|views))/i);
-      if (m) {
-        const raw = m[1].replace(/[^\d]/g, ""); // убираем пробелы и nbsp
-        const num = parseInt(raw, 10);
-        if (!Number.isNaN(num)) {
-          views = num;
-          break; // берём первый нормальный матч
-        }
-      }
-    }
-
-    // Комментарии: от svg[aria-label="Ответ"/"Reply"] к ближайшему span с числом
-    const replyIcon = document.querySelector('svg[aria-label="Ответ"], svg[aria-label="Reply"]');
-    if (replyIcon) {
-      const root = replyIcon.parentElement; // <div ...><svg ...><span ...>...
-      if (root) {
-        const numSpan = root.querySelector("span span, span");
-        if (numSpan) {
-          const t = (numSpan.textContent || "").trim();
-          const m2 = t.match(/\d[\d\s\u00A0]*/);
-          if (m2) {
-            const raw2 = m2[0].replace(/[^\d]/g, "");
-            const num2 = parseInt(raw2, 10);
-            if (!Number.isNaN(num2)) {
-              comments = num2;
-            }
-          }
-        }
-      }
-    }
-
-    return { viewsCount: views, commentsCount: comments };
-  });
-
-  console.log("    Метрики:", { viewsCount, commentsCount });
-
   // ---------- ТЕКСТ ГОЛОВНОГО ПОСТА ----------
 
-  let postText = "";
+  const postText = await page.evaluate(() => {
+    // Берём все span[dir="auto"] — там обычно лежит юзерский текст
+    const spans = Array.from(document.querySelectorAll('span[dir="auto"]'));
+    const rawTexts = spans
+      .map(el => (el.innerText || "").trim())
+      .filter(t => t.length > 0);
 
-  try {
-    // Берём все осмысленные текстовые куски из span[dir="auto"]
-    const textCandidates = await page.$$eval('span[dir="auto"]', els =>
-      els
-        .map(el => (el.innerText || "").trim())
-        .filter(t => t.length > 0)
-        .filter(t =>
-          !/^Translate$/i.test(t) &&
-          !/^Пустая строка$/i.test(t) &&
-          !/^\d+\s*\/\s*\d+$/.test(t)     // 1/2, 2/3 и т.п.
-        )
-    );
+    // фильтруем мусор: Translate, "Пустая строка", "1/2", короткие надписи
+    const cleaned = rawTexts.filter(t => {
+      if (/^Translate$/i.test(t)) return false;
+      if (/^Пустая строка$/i.test(t)) return false;
+      if (/^\d+\s*\/\s*\d+$/.test(t)) return false; // 1/2, 2/3 и т.п.
+      if (/^View .* more replies$/i.test(t)) return false;
+      if (/^View .* replies$/i.test(t)) return false;
+      if (/^Reply$/i.test(t)) return false;
+      if (/^Ответ$/i.test(t)) return false;
+      return true;
+    });
 
-    console.log("    text candidates (шт.):", textCandidates.length);
+    // отдаём приоритет русскому тексту (с кириллицей)
+    const russian = cleaned.filter(t => /[А-Яа-яЁё]/.test(t));
 
-    if (textCandidates.length) {
-      // берём самый длинный текст как главный пост
-      postText = textCandidates.sort((a, b) => b.length - a.length)[0];
+    // если есть русские фразы — берём ПЕРВУЮ достаточно длинную
+    for (const t of russian) {
+      if (t.length >= 20) return t;
     }
-  } catch (e) {
-    console.log("    Ошибка при парсе текста поста:", e.message);
-  }
+    // иначе берём самый длинный русский
+    if (russian.length) {
+      return russian.sort((a, b) => b.length - a.length)[0];
+    }
 
-  console.log("    Текст поста (обрезан):", postText.slice(0, 100), "...");
+    // если вообще нет кириллицы — fallback: любой текст
+    for (const t of cleaned) {
+      if (t.length >= 20) return t;
+    }
+    return cleaned[0] || "";
+  });
 
-  // ---------- ЗАПИСЬ В ТАБЛИЦУ: ТОЛЬКО ПОСТ ----------
+  console.log("    Текст поста (обрезан):", (postText || "").slice(0, 120), "...");
 
   const rowPost = {
     keyword,
     status: "пост",
     url: normalizedUrl,
-    author: "",           // при желании потом можно добить селектором ника
-    text: postText,
-    views: viewsCount,
-    comments: commentsCount
+    author: "",
+    text: postText || "",
+    views: null,
+    comments: null
   };
 
   await sendRow(rowPost);
