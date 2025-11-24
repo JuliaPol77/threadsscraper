@@ -2,7 +2,7 @@ name: Threads scrape by keywords
 
 on:
   schedule:
-    - cron: "30 13 * * *"   # каждый день в 07:00 UTC
+    - cron: "*/5 * * * *"   # каждые 5 минут
   workflow_dispatch: {}    # можно запустить вручную из вкладки Actions
 
 jobs:
