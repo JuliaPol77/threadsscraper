@@ -69,33 +69,31 @@ async function scrapeThread(page, keyword, url) {
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  // ---------- ПРОСМОТРЫ ----------
+   // ---------- ПРОСМОТРЫ (как строка "73 141") ----------
   const { viewsCount } = await page.evaluate(() => {
-    function parseViewsFromText(t) {
+    function extractViewsText(t) {
       if (!t) return null;
-      // Ищем одну самую длинную "цифровую" группу с пробелами: "73 141"
-      const m = t.match(/(\d[\d\s\u00A0]*)/);
+      // Берём первую группу "цифры + пробелы": "73 141"
+      const m = t.match(/([\d\s\u00A0]+)/);
       if (!m) return null;
-      const digitsOnly = m[1].replace(/[^\d]/g, ""); // "73 141" → "73141"
-      if (!digitsOnly) return null;
-      const num = parseInt(digitsOnly, 10);
-      return Number.isNaN(num) ? null : num;
+      // Заменяем неразрывные пробелы на обычные и подрезаем края
+      return m[1].replace(/\u00A0/g, " ").trim();
     }
 
     let views = null;
 
-    // 1) Пытаемся взять "правильный" блок по контейнеру просмотров
+    // 1) Пытаемся взять главный блок по контейнеру просмотров
     const primaryEl = document.querySelector('div.x1b12d3d span span');
     if (primaryEl) {
       const t = (primaryEl.textContent || "").trim();
-      const n = parseViewsFromText(t);
-      if (n !== null) {
-        views = n;
+      const v = extractViewsText(t);
+      if (v) {
+        views = v; // например "73 141"
       }
     }
 
-    // 2) Fallback: если вдруг поменяли верстку и primaryEl не нашли —
-    // пробегаемся по всем span с "просмотр"/"views"
+    // 2) Fallback: если верстка поменялась и primaryEl не нашли —
+    // ищем любой span с "просмотр"/"views"
     if (views === null) {
       const spans = Array.from(document.querySelectorAll("span"));
       const texts = spans
@@ -104,19 +102,16 @@ async function scrapeThread(page, keyword, url) {
         .filter(t => /просмотр/i.test(t) || /views?/i.test(t));
 
       for (const t of texts) {
-        const n = parseViewsFromText(t);
-        if (n !== null) {
-          if (views === null || n > views) {
-            views = n;
-          }
+        const v = extractViewsText(t);
+        if (v) {
+          views = v;
+          break;
         }
       }
     }
 
     return { viewsCount: views };
   });
-
-
 
   console.log("    Просмотры (итог):", viewsCount);
 
