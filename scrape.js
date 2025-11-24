@@ -5,7 +5,6 @@ const SPREADSHEET_ID = "1jl9gmFElhLw3i-eEPg2tdf6XYNL9xKWyDJuAiaRG-I0";
 
 // >>> ВСТАВЬ СЮДА СВОЙ WEBHOOK ИЗ APPS SCRIPT
 const APP_SCRIPT_WEBHOOK = "https://script.google.com/macros/s/AKfycbzJ6_YlOThPmeD9rRT6mhr_zWiHzokQLr5AaQ9Uxw_XwBz0VY8YUBFTKY-3SegLquIP/exec";
-
 const KEY_SHEET_NAME = "ключи";
 const MAX_POSTS_PER_KEYWORD = 5;
 
@@ -61,7 +60,7 @@ async function searchPosts(page, keyword) {
   return top;
 }
 
-// разбор одного поста: пост + подряд идущие комменты АВТОРА
+// разбор одного поста: пост + подряд идущие КОММЕНТЫ АВТОРА
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
 
@@ -91,14 +90,14 @@ async function scrapeThread(page, keyword, url) {
       return texts.join("\n");
     }
 
-    // ВАЖНО: проверяем не только внутри блока, но и у предков —
-    // именно там лежит <a href="/@author">
+    // ВАЖНО: ищем ссылку на автора ТОЛЬКО В БЛИЖАЙШИХ ПРЕДКАХ
     function isBlockByAuthor(block, handle) {
       if (!handle) return false;
       const needle = `/@${handle}`;
 
       let node = block;
-      while (node && node !== document.body) {
+      // ограничиваем глубину, чтобы не достать общий верхний хедер
+      for (let depth = 0; depth < 4 && node && node !== document.body; depth++) {
         const links = Array.from(node.querySelectorAll('a[href^="/@"]'));
         for (const a of links) {
           const href = a.getAttribute("href") || "";
@@ -111,7 +110,7 @@ async function scrapeThread(page, keyword, url) {
       return false;
     }
 
-    // собираем список блоков с текстом/флагом автора
+    // собираем текстовые блоки
     const rawBlocks = Array.from(document.querySelectorAll("div.x1a6qonq"));
     const items = rawBlocks.map(block => {
       const full = getBlockText(block);
@@ -124,21 +123,20 @@ async function scrapeThread(page, keyword, url) {
       return { postText: "", comments: [] };
     }
 
-    // ищем индекс поста: первый кириллический блок автора, иначе первый кириллический
+    // пост = первый кириллический блок автора, иначе первый кириллический
     let postIndex = items.findIndex(it => it.isAuthor);
     if (postIndex === -1) postIndex = 0;
 
     const postText = items[postIndex].full;
     const comments = [];
 
-    // после поста идём вперёд:
-    // если блок тоже автора — это его комментарий,
-    // если не автора — сразу выходим (как ты и хотела)
+    // после поста: берём ТОЛЬКО подряд идущие блоки автора
     for (let i = postIndex + 1; i < items.length; i++) {
       const it = items[i];
       if (it.isAuthor) {
         comments.push(it.full);
       } else {
+        // первый русский блок НЕ автора — стоп, дальше по треду не идём
         break;
       }
     }
@@ -150,7 +148,7 @@ async function scrapeThread(page, keyword, url) {
   console.log("    Текст поста (обрезан):", (postText || "").slice(0, 150), "...");
   console.log("    Комментов автора найдено:", comments.length);
 
-  // ---------- запись поста ----------
+  // ---- запись поста ----
   const rowPost = {
     keyword,
     status: "пост",
@@ -162,7 +160,7 @@ async function scrapeThread(page, keyword, url) {
   };
   await sendRow(rowPost);
 
-  // ---------- запись ТОЛЬКО авторских комментариев ----------
+  // ---- запись ТОЛЬКО авторских комментов ----
   for (const cText of comments) {
     const rowComment = {
       keyword,
@@ -184,7 +182,7 @@ async function scrapeThread(page, keyword, url) {
 
     const browser = await chromium.launch({ headless: true });
     const context = await browser.newContext();
-    const page = await browser.newPage ? await browser.newPage() : await context.newPage(); // на всякий случай
+    const page = await context.newPage();
 
     for (const keyword of keywords) {
       const postUrls = await searchPosts(page, keyword);
