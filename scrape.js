@@ -13,7 +13,7 @@ const MAX_POSTS_PER_KEYWORD = 5;
 const KEY_CSV_URL =
   `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(KEY_SHEET_NAME)}`;
 
-// читаем ключевые слова из CSV (то, что уже работает)
+// читаем ключевые слова из CSV
 async function readKeywords() {
   const res = await fetch(KEY_CSV_URL);
   const csv = await res.text();
@@ -26,7 +26,7 @@ async function readKeywords() {
     .map(l => l.replace(/^"+|"+$/g, "")); // убираем лишние кавычки по краям
 }
 
-// отправка строки в Apps Script (у тебя уже работает)
+// отправка строки в Apps Script
 async function sendRow(rowObj) {
   rowObj.ts = new Date().toISOString();
 
@@ -62,7 +62,7 @@ async function searchPosts(page, keyword) {
   return top;
 }
 
-// разбор одного поста: ТОЛЬКО текст головного поста, БЕЗ метрик и комментов
+// разбор одного поста: СБОР ВСЕГО ТЕКСТА ПОСТА ИЗ НЕСКОЛЬКИХ SPAN
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
 
@@ -71,47 +71,48 @@ async function scrapeThread(page, keyword, url) {
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  // ---------- ТЕКСТ ГОЛОВНОГО ПОСТА ----------
+  // ---------- ТЕКСТ ГОЛОВНОГО ПОСТА ЦЕЛИКОМ ----------
 
   const postText = await page.evaluate(() => {
-    // Берём все span[dir="auto"] — там обычно лежит юзерский текст
-    const spans = Array.from(document.querySelectorAll('span[dir="auto"]'));
-    const rawTexts = spans
-      .map(el => (el.innerText || "").trim())
-      .filter(t => t.length > 0);
+    // 1) Ищем ВСЕ контейнеры постов/комментов
+    const blocks = Array.from(document.querySelectorAll("div.x1a6qonq"));
 
-    // фильтруем мусор: Translate, "Пустая строка", "1/2", короткие надписи
-    const cleaned = rawTexts.filter(t => {
-      if (/^Translate$/i.test(t)) return false;
-      if (/^Пустая строка$/i.test(t)) return false;
-      if (/^\d+\s*\/\s*\d+$/.test(t)) return false; // 1/2, 2/3 и т.п.
-      if (/^View .* more replies$/i.test(t)) return false;
-      if (/^View .* replies$/i.test(t)) return false;
-      if (/^Reply$/i.test(t)) return false;
-      if (/^Ответ$/i.test(t)) return false;
-      return true;
-    });
+    const candidates = [];
 
-    // отдаём приоритет русскому тексту (с кириллицей)
-    const russian = cleaned.filter(t => /[А-Яа-яЁё]/.test(t));
+    for (const block of blocks) {
+      // внутри контейнера собираем span[dir="auto"]
+      const spans = Array.from(block.querySelectorAll('span[dir="auto"]'));
+      const texts = spans
+        .map(el => (el.innerText || "").trim())
+        .filter(t => t.length > 0)
+        .filter(t => {
+          if (/^Translate$/i.test(t)) return false;
+          if (/^Пустая строка$/i.test(t)) return false;
+          if (/^\d+\s*\/\s*\d+$/.test(t)) return false; // 1/2, 2/3
+          return true;
+        });
 
-    // если есть русские фразы — берём ПЕРВУЮ достаточно длинную
-    for (const t of russian) {
-      if (t.length >= 20) return t;
-    }
-    // иначе берём самый длинный русский
-    if (russian.length) {
-      return russian.sort((a, b) => b.length - a.length)[0];
+      if (!texts.length) continue;
+
+      const full = texts.join("\n");
+      candidates.push(full);
     }
 
-    // если вообще нет кириллицы — fallback: любой текст
-    for (const t of cleaned) {
-      if (t.length >= 20) return t;
+    if (!candidates.length) {
+      return "";
     }
-    return cleaned[0] || "";
+
+    // отдаём приоритет блоку с кириллицей и максимальной длиной
+    const withCyrillic = candidates.filter(t => /[А-Яа-яЁё]/.test(t));
+    if (withCyrillic.length) {
+      return withCyrillic.sort((a, b) => b.length - a.length)[0];
+    }
+
+    // если почему-то нет кириллицы — берём просто самый длинный блок
+    return candidates.sort((a, b) => b.length - a.length)[0];
   });
 
-  console.log("    Текст поста (обрезан):", (postText || "").slice(0, 120), "...");
+  console.log("    Текст поста (обрезан):", (postText || "").slice(0, 150), "...");
 
   const rowPost = {
     keyword,
