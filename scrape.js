@@ -9,6 +9,7 @@ const APP_SCRIPT_WEBHOOK = "https://script.google.com/macros/s/AKfycbzJ6_YlOThPm
 const KEY_SHEET_NAME = "ключи";
 const MAX_POSTS_PER_KEYWORD = 5;
 
+// CSV URL для листа "ключи"
 const KEY_CSV_URL =
   `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(KEY_SHEET_NAME)}`;
 
@@ -61,21 +62,22 @@ async function searchPosts(page, keyword) {
   return top;
 }
 
-// разбор одного поста: БЕРЁМ ТОЛЬКО ПЕРВЫЙ div.x1a6qonq С КИРИЛЛИЦЕЙ И СКЛЕИВАЕМ ВСЁ
+// разбор одного поста: пост + подряд идущие комменты автора
 async function scrapeThread(page, keyword, url) {
   console.log("  Открываю пост:", url);
 
   const normalizedUrl = url.replace("https://www.threads.com", "https://www.threads.net");
-
   await page.goto(normalizedUrl, { waitUntil: "networkidle" });
   await page.waitForTimeout(4000);
 
-  const postText = await page.evaluate(() => {
-    // Ищем ВСЕ блоки-посты/комменты
-    const blocks = Array.from(document.querySelectorAll("div.x1a6qonq"));
+  // автор из URL: https://www.threads.net/@agnzloy/post/... -> agnzloy
+  const m = normalizedUrl.match(/\/@([^/]+)/);
+  const authorHandle = m ? m[1] : "";
+  const authorField = authorHandle ? `@${authorHandle}` : "";
 
-    for (const block of blocks) {
-      // внутри блока собираем span[dir="auto"]
+  const { postText, comments } = await page.evaluate((authorHandle) => {
+    // вспомогательная функция: собрать текст блока целиком
+    function getBlockText(block) {
       const spans = Array.from(block.querySelectorAll('span[dir="auto"]'));
       const texts = spans
         .map(el => (el.innerText || "").trim())
@@ -83,37 +85,105 @@ async function scrapeThread(page, keyword, url) {
         .filter(t => {
           if (/^Translate$/i.test(t)) return false;
           if (/^Пустая строка$/i.test(t)) return false;
-          if (/^\d+\s*\/\s*\d+$/.test(t)) return false; // 1/2, 2/3 и т.п.
+          if (/^\d+\s*\/\s*\d+$/.test(t)) return false; // 1/2, 2/3
           return true;
         });
 
-      if (!texts.length) continue;
+      if (!texts.length) return "";
+      return texts.join("\n");
+    }
 
-      const full = texts.join("\n");
+    // проверка: есть ли у блока/его предков ссылка на автора
+    function isBlockByAuthor(block, handle) {
+      if (!handle) return false;
+      let node = block;
+      const needle = `/@${handle}`;
+      while (node && node !== document.body) {
+        const links = Array.from(node.querySelectorAll('a[href^="/@"]'));
+        for (const a of links) {
+          const href = a.getAttribute("href") || "";
+          if (href.includes(needle)) {
+            return true;
+          }
+        }
+        node = node.parentElement;
+      }
+      return false;
+    }
 
-      // берём ПЕРВЫЙ блок, в котором есть кириллица — это и будет пост
-      if (/[А-Яа-яЁё]/.test(full)) {
-        return full;
+    const blocks = Array.from(document.querySelectorAll("div.x1a6qonq"));
+
+    let postText = "";
+    const comments = [];
+    let started = false; // уже нашли пост автора
+    let stopped = false; // встретили чужой русский блок после поста
+
+    for (const block of blocks) {
+      if (stopped) break;
+
+      const full = getBlockText(block);
+      if (!full) continue;
+
+      // интересуют только блоки с кириллицей
+      if (!/[А-Яа-яЁё]/.test(full)) continue;
+
+      const byAuthor = isBlockByAuthor(block, authorHandle);
+
+      if (!started) {
+        // ещё не нашли пост автора
+        if (byAuthor) {
+          postText = full;   // это головной пост
+          started = true;
+        } else {
+          // чужие блоки до поста игнорируем
+          continue;
+        }
+      } else {
+        // уже нашли пост, смотрим следующие русские блоки
+        if (byAuthor) {
+          comments.push(full); // комментарий автора
+        } else {
+          // первый русский блок не автора -> останавливаемся
+          stopped = true;
+          break;
+        }
       }
     }
 
-    // если кириллицы нет — вообще ничего не возвращаем
-    return "";
-  });
+    return { postText, comments };
+  }, authorHandle);
 
+  console.log("    Автор:", authorField || "(не найден)");
   console.log("    Текст поста (обрезан):", (postText || "").slice(0, 150), "...");
+  console.log("    Комментов автора найдено:", comments.length);
 
+  // ---------- запись в таблицу ----------
+
+  // строка для поста
   const rowPost = {
     keyword,
     status: "пост",
     url: normalizedUrl,
-    author: "",
+    author: authorField,
     text: postText || "",
     views: null,
     comments: null
   };
-
   await sendRow(rowPost);
+
+  // строки для комментариев автора (если есть)
+  for (const cText of comments) {
+    const rowComment = {
+      keyword,
+      status: "комментарий",
+      url: normalizedUrl,
+      author: authorField,
+      text: cText,
+      views: null,
+      comments: null
+    };
+    await sendRow(rowComment);
+  }
 }
 
 (async () => {
