@@ -82,11 +82,27 @@ async function scrapeThread(page, keyword, url) {
       /просмотр/i.test(t) || /views?/i.test(t)
     );
 
+    console.log("    [views] candidates:", candidates);
+
     for (const t of candidates) {
-      const digits = t.replace(/[^\d]/g, "");
-      if (!digits) continue;
-      const num = parseInt(digits, 10);
+      const groups = t.match(/\d+/g); // все группы цифр: ["35","754"]
+      if (!groups || !groups.length) continue;
+
+      let numStr;
+
+      if (groups.length === 1) {
+        numStr = groups[0]; // просто "357"
+      } else if (groups.length === 2 && groups[1].length === 3) {
+        // формат типа "35 754" → "35754"
+        numStr = groups[0] + groups[1];
+      } else {
+        // на всякий случай — склеиваем всё
+        numStr = groups.join("");
+      }
+
+      const num = parseInt(numStr, 10);
       if (!Number.isNaN(num)) {
+        console.log("    [views] parsed:", t, "=>", num);
         if (views === null || num > views) {
           views = num;
         }
@@ -96,7 +112,7 @@ async function scrapeThread(page, keyword, url) {
     return { viewsCount: views };
   });
 
-  console.log("    Просмотры:", viewsCount);
+  console.log("    Просмотры (итог):", viewsCount);
 
   // ---------- АВТОР И ТЕКСТЫ (рабочая логика) ----------
 
