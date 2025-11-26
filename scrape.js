@@ -58,7 +58,7 @@ async function sendRow(rowObj) {
 // поиск постов по ключу
 async function searchPosts(page, keyword) {
   const searchUrl =
-    `https://www.threads.com/search?q=${encodeURIComponent(keyword)}`;
+    `https://www.threads.com/@${encodeURIComponent(keyword)}`;
   console.log("Поиск:", searchUrl);
 
   await page.goto(searchUrl, { waitUntil: "networkidle" });
